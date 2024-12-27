@@ -477,6 +477,11 @@ similar to the following:
   },
   {
     "in": "Reunion.mscz",
+    "out": "Reunion\-degreecoloured.pdf",
+    "plugin": "degreecolors.qml"
+  },
+  {
+    "in": "Reunion.mscz",
     "out": [
       "Reunion.pdf",
       [ "Reunion (part for ", ").pdf" ],
