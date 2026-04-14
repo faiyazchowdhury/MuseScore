@@ -23,7 +23,7 @@
 /*!
  * \file editstyle.cpp
  * \brief Implementation of the score style dialog, including the dynamic note-color UI on the Notes page
- *        (presets, schemes, apply-to flags, and reset).
+ *        (presets, schemes, apply-to flags, reset, and selection-based chord-root coloring).
  *
  * The Notes tab is mostly Qt widgets; after building the Color group, @c PageNotes is reparented into
  * a @c QScrollArea so the tab scrolls when the stacked page height is limited (same pattern as other
@@ -861,7 +861,7 @@ void EditStyle::classBegin()
     // ====================================================
     /*!
      * \internal Builds the Notes-page Color @c QGroupBox: preset and scheme combos, twelve swatches, apply-to
-     * checkboxes, concert-pitch radios, and reset. Lambdas keep preset
+     * checkboxes, concert-pitch radios, reset, and chord-root coloring for the selection. Lambdas keep preset
      * labels in sync with palette state. After this block, @c PageNotes is rebuilt: layout items from the UI
      * are cleared (widgets are not destroyed), and flag, color, notes, and alignment groups are stacked inside
      * a single @c QScrollArea child so the tab scrolls when @c pageStack minimum height is tight.
@@ -872,11 +872,15 @@ void EditStyle::classBegin()
             Default = 0,
             Boomwhackers = 1,
             FigureNotes = 2,
-            Custom = 3
+            ChordDegrees = 3,
+            Custom = 4
         };
 
-        //! Number of visible swatches for @p scheme (7 diatonic modes, otherwise 12 chromatic).
+        //! Number of visible swatches for @p scheme (7 diatonic modes, 10 chord-degree slots, otherwise 12 chromatic).
         auto swatchCountForScheme = [](NoteColoringScheme scheme) {
+            if (scheme == NoteColoringScheme::ChordDegrees) {
+                return 10;
+            }
             return (scheme == NoteColoringScheme::AbsolutePitchSimple || scheme == NoteColoringScheme::MoveableDoSimple) ? 7 : 12;
         };
 
@@ -889,6 +893,7 @@ void EditStyle::classBegin()
         m_noteColorPresetCombo->addItem(muse::qtrc("notation/editstyle", "Boomwhackers"), static_cast<int>(NoteColorPreset::Boomwhackers));
         m_noteColorPresetCombo->addItem(muse::qtrc("notation/editstyle", "Figurenotes (stage 3)"),
                                         static_cast<int>(NoteColorPreset::FigureNotes));
+        m_noteColorPresetCombo->addItem(muse::qtrc("notation/editstyle", "Chord degrees"), static_cast<int>(NoteColorPreset::ChordDegrees));
         m_noteColorPresetCombo->addItem(muse::qtrc("notation/editstyle", "Custom"), static_cast<int>(NoteColorPreset::Custom));
 
         m_noteColorSchemeCombo = new QComboBox();
@@ -901,6 +906,8 @@ void EditStyle::classBegin()
                                         static_cast<int>(NoteColoringScheme::MoveableDoSimple));
         m_noteColorSchemeCombo->addItem(muse::qtrc("notation/editstyle", "Moveable do (chromatic)"),
                                         static_cast<int>(NoteColoringScheme::MoveableDoChromatic));
+        m_noteColorSchemeCombo->addItem(muse::qtrc("notation/editstyle", "Chord degrees"),
+                                        static_cast<int>(NoteColoringScheme::ChordDegrees));
 
         styleWidgets.append({ StyleId::noteColorTheme, false, m_noteColorSchemeCombo, nullptr });
 
@@ -982,7 +989,10 @@ void EditStyle::classBegin()
         vbl->addWidget(m_noteColorPitchGroupBox);
 
         m_noteColorResetBtn = new QPushButton(muse::qtrc("notation/editstyle", "Reset all color settings"));
+        m_noteColorChordRootBtn = new QPushButton(muse::qtrc("notation/editstyle", "Color selection by chord root"));
+        m_noteColorChordRootBtn->setVisible(false);
         QHBoxLayout* hlReset = new QHBoxLayout();
+        hlReset->addWidget(m_noteColorChordRootBtn);
         hlReset->addStretch();
         hlReset->addWidget(m_noteColorResetBtn);
         vbl->addLayout(hlReset);
@@ -1003,6 +1013,11 @@ void EditStyle::classBegin()
             QColor(146, 192, 226), QColor(166, 172, 175), QColor(31, 152, 210),
             QColor(181, 137, 199), QColor(230, 231, 232), QColor(0, 0, 0),
             QColor(251, 237, 34),  QColor(168, 202, 60),  QColor(57, 171, 71) };
+        static const QColor chordDegreeColors[] = {
+            QColor(0x62, 0xBC, 0x47), QColor(0x15, 0x60, 0xBD), QColor(0xB3, 0x2D, 0x00),
+            QColor(0xFF, 0xF7, 0x00), QColor(0x5D, 0xB0, 0xF0), QColor(0xFF, 0x45, 0x00),
+            QColor(0xFF, 0xA5, 0x00), QColor(0x50, 0x50, 0x50), QColor(0x80, 0x80, 0x80),
+            QColor(0x00, 0x00, 0x00), QColor(0x00, 0x00, 0x00), QColor(0x00, 0x00, 0x00) };
 
         Awl::ColorLabel* colorLabels[12];
         QLabel* colorTextLabels[12];
@@ -1024,7 +1039,7 @@ void EditStyle::classBegin()
             styleWidgets.append({ colorSids[i], false, colorLabels[i], nullptr });
         }
 
-        //! Sets the preset combo to Default / Boomwhackers / Figurenotes / Custom from current colors.
+        //! Sets the preset combo to Default / Boomwhackers / Figurenotes / Chord degrees / Custom from current colors.
         auto updatePresetFromState = [=]() {
             // Match EditStyle::getValue(StyleId::noteColorTheme): INT comboboxes use item user data, not row index.
             NoteColoringScheme coloringScheme = static_cast<NoteColoringScheme>(m_noteColorSchemeCombo->currentData().toInt());
@@ -1050,6 +1065,7 @@ void EditStyle::classBegin()
             } else {
                 bool isBoom = true;
                 bool isFig = true;
+                bool isDeg = true;
                 int numSwatches = swatchCountForScheme(coloringScheme);
                 for (int i = 0; i < numSwatches; ++i) {
                     if (colorLabels[i]->color() != boomwhackerColors[i]) {
@@ -1058,11 +1074,16 @@ void EditStyle::classBegin()
                     if (colorLabels[i]->color() != figurenotesColors[i]) {
                         isFig = false;
                     }
+                    if (colorLabels[i]->color() != chordDegreeColors[i]) {
+                        isDeg = false;
+                    }
                 }
                 if (isBoom) {
                     inferredPreset = static_cast<int>(NoteColorPreset::Boomwhackers);
                 } else if (isFig) {
                     inferredPreset = static_cast<int>(NoteColorPreset::FigureNotes);
+                } else if (isDeg) {
+                    inferredPreset = static_cast<int>(NoteColorPreset::ChordDegrees);
                 }
             }
 
@@ -1141,24 +1162,39 @@ void EditStyle::classBegin()
                 muse::qtrc("notation/editstyle", "Li/Te", "note color swatch, movable do chromatic"),
                 muse::qtrc("notation/editstyle", "Ti", "note color swatch, movable do chromatic"),
             };
+            const QString chordDegreeNames[] = {
+                muse::qtrc("notation/editstyle", "I", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "ii", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "iii", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "IV", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "V", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "vi", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "vii", "chord degree swatch, Roman numeral"),
+                muse::qtrc("notation/editstyle", "3rd", "chord degree swatch, interval"),
+                muse::qtrc("notation/editstyle", "5th", "chord degree swatch, interval"),
+                muse::qtrc("notation/editstyle", "Acc.", "chord degree swatch, accidental tone"),
+            };
 
             if (schemeMode == NoteColoringScheme::OneColor) {
                 m_noteColorSwatchesContainer->setVisible(false);
                 m_noteColorSwatchColorLabel->setVisible(true);
                 defaultColorLabel->setVisible(true);
                 m_noteColorResetBtn->setVisible(true);
+                m_noteColorChordRootBtn->setVisible(false);
                 m_noteColorSchemeDescription->setVisible(false);
             } else {
                 m_noteColorSwatchesContainer->setVisible(true);
                 m_noteColorSwatchColorLabel->setVisible(false);
                 defaultColorLabel->setVisible(false);
                 m_noteColorResetBtn->setVisible(true);
+                m_noteColorChordRootBtn->setVisible(schemeMode == NoteColoringScheme::ChordDegrees);
                 m_noteColorSchemeDescription->setVisible(true);
 
                 int numSwatches = swatchCountForScheme(schemeMode);
                 const QString* names = (schemeMode == NoteColoringScheme::AbsolutePitchSimple) ? absoluteSimpleNames
                                        : (schemeMode == NoteColoringScheme::AbsolutePitchChromatic) ? absoluteChromaticNames
                                        : (schemeMode == NoteColoringScheme::MoveableDoSimple) ? moveableSimpleNames
+                                       : (schemeMode == NoteColoringScheme::ChordDegrees) ? chordDegreeNames
                                        : moveableChromaticNames;
 
                 for (int i = 0; i < 12; ++i) {
@@ -1184,6 +1220,9 @@ void EditStyle::classBegin()
                 } else if (schemeMode == NoteColoringScheme::MoveableDoChromatic) {
                     m_noteColorSchemeDescription->setText(muse::qtrc("notation/editstyle",
                                                                      "Color notes based on scale degree, including chromatic pitches. Enharmonics will be the same color."));
+                } else if (schemeMode == NoteColoringScheme::ChordDegrees) {
+                    m_noteColorSchemeDescription->setText(muse::qtrc("notation/editstyle",
+                                                                     "Analyze each measure to detect the chord root, then color the root by its scale degree. The 3rd and 5th of the chord get grey tones. Other diatonic notes show their own degree color. Chromatic notes use the accidental color."));
                 }
             }
         };
@@ -1202,8 +1241,8 @@ void EditStyle::classBegin()
 
         /*!
          * Preset combo: applies packaged swatches and aligns the scheme combo with the preset
-         * (Default @c -> OneColor, Boomwhackers/FigureNotes @c -> AbsolutePitchChromatic)
-         * so automatic coloring matches the loaded colors.
+         * (Default @c -> OneColor, Boomwhackers/FigureNotes @c -> AbsolutePitchChromatic,
+         * Chord degrees @c -> ChordDegrees) so automatic coloring matches the loaded colors.
          * Always calls @c valueChanged(noteColorTheme) at the end (scheme combo updates use
          * @c blockSignals so the styleWidgets mapper does not double-write).
          */
@@ -1250,6 +1289,22 @@ void EditStyle::classBegin()
                 } else {
                     m_noteColorRbWritten->setChecked(true);
                 }
+                valueChanged(static_cast<int>(StyleId::colorNotesByConcertPitch));
+            } else if (preset == NoteColorPreset::ChordDegrees) {
+                for (int i = 0; i < 12; ++i) {
+                    colorLabels[i]->blockSignals(true);
+                    colorLabels[i]->setColor(chordDegreeColors[i]);
+                    colorLabels[i]->blockSignals(false);
+                    valueChanged(static_cast<int>(colorSids[i]));
+                }
+                int cdIdx = m_noteColorSchemeCombo->findData(static_cast<int>(NoteColoringScheme::ChordDegrees));
+                if (cdIdx >= 0 && m_noteColorSchemeCombo->currentIndex() != cdIdx) {
+                    m_noteColorSchemeCombo->blockSignals(true);
+                    m_noteColorSchemeCombo->setCurrentIndex(cdIdx);
+                    m_noteColorSchemeCombo->blockSignals(false);
+                    updateSwatchesUI(NoteColoringScheme::ChordDegrees);
+                }
+                m_noteColorRbWritten->setChecked(true);
                 valueChanged(static_cast<int>(StyleId::colorNotesByConcertPitch));
             }
             valueChanged(static_cast<int>(StyleId::noteColorTheme));
@@ -1307,6 +1362,128 @@ void EditStyle::classBegin()
             m_noteColorPresetCombo->blockSignals(false);
 
             updatePresetFromState();
+        });
+
+        /*!
+         * @c Color selection by chord root (Chord degrees UI only).
+         *
+         * Estimates one root pitch class from @c analyzeChordRoot() using only the current
+         * selection's notes (@c score->selection().noteList()), not a full-score scan in the
+         * time window, so the root matches the user's selection (list or range).
+         *
+         * Pass1: for each selected note, sets @c Pid::COLOR from the chord-degree swatch for
+         * that note relative to the selection root; when @c Sid::colorApplyToAccidental /
+         * @c Sid::colorApplyToDot are on, accidentals and dots get the same color as their note.
+         *
+         * Pass 2: per distinct chord, sets stem, beam (once per beam), and articulations to the
+         * root's own swatch when the corresponding @c Sid::colorApplyTo* flags are on. That
+         * matches explicit coloring to the selection root; measure-wide auto root in
+         * @c chordRootNoteColor() would disagree after pass 1.
+         */
+        connect(m_noteColorChordRootBtn, &QPushButton::clicked, this, [=]() {
+            const INotationPtr notation = globalContext()->currentNotation();
+            if (!notation) {
+                return;
+            }
+            Score* score = notation->elements()->msScore();
+            if (!score) {
+                return;
+            }
+
+            std::vector<Note*> notes = score->selection().noteList();
+            if (notes.empty()) {
+                return;
+            }
+
+            const bool concertColoring = score->style().styleV(Sid::colorNotesByConcertPitch).toBool();
+
+            Fraction windowStart = notes.front()->tick();
+            Fraction windowEnd = windowStart;
+            for (Note* n : notes) {
+                Fraction t = n->tick();
+                if (t < windowStart) {
+                    windowStart = t;
+                }
+                Chord* ch = n->chord();
+                if (!ch) {
+                    continue;
+                }
+                Fraction noteEnd = t + ch->actualTicks();
+                if (noteEnd > windowEnd) {
+                    windowEnd = noteEnd;
+                }
+            }
+
+            std::vector<ChordDegreeNoteInfo> noteInfos;
+            for (Note* n : notes) {
+                Chord* ch = n->chord();
+                if (!ch) {
+                    continue;
+                }
+                Fraction t = n->tick();
+                int durTicks = ch->actualTicks().ticks();
+                const int colorEpitch = n->pitch() - (concertColoring ? 0 : n->transposition()) + n->linkedOttavaPitchOffset();
+                noteInfos.push_back({ colorEpitch, durTicks, (t - windowStart).ticks() });
+            }
+
+            int windowTicks = (windowEnd - windowStart).ticks();
+            if (windowTicks <= 0) {
+                windowTicks = 480;
+            }
+
+            int rootChroma = analyzeChordRoot(noteInfos, windowTicks);
+
+            score->startCmd(muse::TranslatableString("undoableAction", "Color selection by chord root"));
+            for (Note* n : notes) {
+                const int colorEpitch = n->pitch() - (concertColoring ? 0 : n->transposition()) + n->linkedOttavaPitchOffset();
+                int chroma = colorEpitch % 12;
+                if (chroma < 0) {
+                    chroma += 12;
+                }
+                int tonicPC = noteChordDegreesTonicPc(n);
+                int colorIdx = chordDegreeColorIndex(chroma, rootChroma, tonicPC);
+                QColor swatchColor = colorLabels[colorIdx]->color();
+                PropertyValue noteColorVal = PropertyValue::fromValue(Color::fromQColor(swatchColor));
+                n->undoChangeProperty(Pid::COLOR, noteColorVal);
+
+                if (n->accidental() && score->style().styleV(Sid::colorApplyToAccidental).toBool()) {
+                    n->accidental()->undoChangeProperty(Pid::COLOR, noteColorVal);
+                }
+                for (NoteDot* dot : n->dots()) {
+                    if (dot && score->style().styleV(Sid::colorApplyToDot).toBool()) {
+                        dot->undoChangeProperty(Pid::COLOR, noteColorVal);
+                    }
+                }
+            }
+
+            std::set<const Chord*> coloredChords;
+            std::set<const Beam*> coloredBeams;
+            for (Note* n : notes) {
+                Chord* ch = n->chord();
+                if (!ch || coloredChords.count(ch)) {
+                    continue;
+                }
+                coloredChords.insert(ch);
+
+                int tonicPC = noteChordDegreesTonicPc(ch->upNote());
+                int rootSwatchIdx = chordDegreeColorIndex(rootChroma, rootChroma, tonicPC);
+                PropertyValue rootColorVal = PropertyValue::fromValue(Color::fromQColor(colorLabels[rootSwatchIdx]->color()));
+
+                if (ch->stem() && score->style().styleV(Sid::colorApplyToStem).toBool()) {
+                    ch->stem()->undoChangeProperty(Pid::COLOR, rootColorVal);
+                }
+                Beam* beam = ch->beam();
+                if (beam && !coloredBeams.count(beam) && score->style().styleV(Sid::colorApplyToBeam).toBool()) {
+                    coloredBeams.insert(beam);
+                    beam->undoChangeProperty(Pid::COLOR, rootColorVal);
+                }
+                for (Articulation* a : ch->articulations()) {
+                    if (score->style().styleV(Sid::colorApplyToArticulation).toBool()) {
+                        a->undoChangeProperty(Pid::COLOR, rootColorVal);
+                    }
+                }
+            }
+            score->endCmd();
         });
 
         m_syncNoteColorUi = [=]() {
@@ -1910,13 +2087,15 @@ void EditStyle::retranslateNoteColorSection()
     m_noteColorPresetCombo->setItemText(0, muse::qtrc("notation/editstyle", "Default"));
     m_noteColorPresetCombo->setItemText(1, muse::qtrc("notation/editstyle", "Boomwhackers"));
     m_noteColorPresetCombo->setItemText(2, muse::qtrc("notation/editstyle", "Figurenotes (stage 3)"));
-    m_noteColorPresetCombo->setItemText(3, muse::qtrc("notation/editstyle", "Custom"));
+    m_noteColorPresetCombo->setItemText(3, muse::qtrc("notation/editstyle", "Chord degrees"));
+    m_noteColorPresetCombo->setItemText(4, muse::qtrc("notation/editstyle", "Custom"));
 
     m_noteColorSchemeCombo->setItemText(0, muse::qtrc("notation/editstyle", "One color"));
     m_noteColorSchemeCombo->setItemText(1, muse::qtrc("notation/editstyle", "Absolute pitch (simple)"));
     m_noteColorSchemeCombo->setItemText(2, muse::qtrc("notation/editstyle", "Absolute pitch (chromatic)"));
     m_noteColorSchemeCombo->setItemText(3, muse::qtrc("notation/editstyle", "Moveable do (simple)"));
     m_noteColorSchemeCombo->setItemText(4, muse::qtrc("notation/editstyle", "Moveable do (chromatic)"));
+    m_noteColorSchemeCombo->setItemText(5, muse::qtrc("notation/editstyle", "Chord degrees"));
 
     m_noteColorApplyToGroupBox->setTitle(muse::qtrc("notation/editstyle", "Apply color to:"));
     m_noteColorCbAccidental->setText(muse::qtrc("notation/editstyle", "Accidentals"));
@@ -1929,6 +2108,7 @@ void EditStyle::retranslateNoteColorSection()
     m_noteColorRbWritten->setText(muse::qtrc("notation/editstyle", "Written pitch"));
     m_noteColorRbConcert->setText(muse::qtrc("notation/editstyle", "Concert pitch"));
     m_noteColorResetBtn->setText(muse::qtrc("notation/editstyle", "Reset all color settings"));
+    m_noteColorChordRootBtn->setText(muse::qtrc("notation/editstyle", "Color selection by chord root"));
 
     if (m_syncNoteColorUi) {
         m_syncNoteColorUi();

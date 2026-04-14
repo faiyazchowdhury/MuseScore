@@ -54,7 +54,7 @@ namespace mu::notation {
  * Full score and part style dialog: binds @c Ui::EditStyleBase widgets to @c engraving::StyleId values.
  *
  * The Notes page adds a programmatic Color @c QGroupBox (presets, schemes, swatches, apply-to, concert pitch,
- * reset) in @c classBegin(), then wraps the whole Notes tab (flags, color, notes,
+ * reset, chord-root action) in @c classBegin(), then wraps the whole Notes tab (flags, color, notes,
  * alignment) in a @c QScrollArea so widget content scrolls like other native Style pages.
  */
 class EditStyle : public muse::ui::WidgetDialog, private Ui::EditStyleBase
@@ -174,6 +174,7 @@ private:
     QRadioButton* m_noteColorRbWritten = nullptr;
     QRadioButton* m_noteColorRbConcert = nullptr;
     QPushButton* m_noteColorResetBtn = nullptr;
+    QPushButton* m_noteColorChordRootBtn = nullptr;
     //! Rebuilds note-color controls from current style (queued after @c setValues()).
     std::function<void()> m_syncNoteColorUi;
     ///@}

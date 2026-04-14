@@ -195,7 +195,8 @@ bool Stem::setProperty(Pid propertyId, const PropertyValue& v)
 
 /*!
  * Default stem properties.
- * For @c Pid::COLOR, returns the top note's color when @c Sid::colorApplyToStem is on.
+ * For @c Pid::COLOR, returns the chord root color via @c chordRootColorDefault() when
+ * @c Sid::colorApplyToStem is on.
  */
 PropertyValue Stem::propertyDefault(Pid id) const
 {
@@ -207,7 +208,7 @@ PropertyValue Stem::propertyDefault(Pid id) const
     case Pid::COLOR:
         if (chord() && !chord()->notes().empty()) {
             if (chord()->upNote()->style().styleV(Sid::colorApplyToStem).toBool()) {
-                return PropertyValue::fromValue(chord()->upNote()->color());
+                return chordRootColorDefault(chord());
             }
         }
     // fall through
@@ -217,14 +218,15 @@ PropertyValue Stem::propertyDefault(Pid id) const
 }
 
 /*!
- * Draw color when using the score default: follows the top note's color if stems inherit note color.
+ * Draw color when using the score default: follows the chord's root note color via
+ * @c chordRootNoteColor() if stems inherit note color.
  */
 Color Stem::color() const
 {
     if (m_color == configuration()->defaultColor()) {
         if (chord() && !chord()->notes().empty()) {
             if (chord()->upNote()->style().styleV(Sid::colorApplyToStem).toBool()) {
-                return chord()->upNote()->color();
+                return chordRootNoteColor(chord());
             }
         }
     }

@@ -669,7 +669,7 @@ bool Beam::setProperty(Pid propertyId, const PropertyValue& v)
 /*!
  * Default beam properties.
  * For @c Pid::COLOR, uses the first chord in @c m_elements (skipping leading rests); when
- * @c Sid::colorApplyToBeam is enabled, returns the top note's color.
+ * @c Sid::colorApplyToBeam is enabled, returns @c chordRootColorDefault().
  */
 PropertyValue Beam::propertyDefault(Pid id) const
 {
@@ -682,7 +682,7 @@ PropertyValue Beam::propertyDefault(Pid id) const
         if (cr) {
             Chord* chord = toChord(cr);
             if (chord->upNote()->style().styleV(Sid::colorApplyToBeam).toBool()) {
-                return PropertyValue::fromValue(chord->upNote()->color());
+                return chordRootColorDefault(chord);
             }
         }
     }
@@ -693,7 +693,7 @@ PropertyValue Beam::propertyDefault(Pid id) const
 
 /*!
  * Draw color when using the score default: if beams inherit note colors, returns
- * the top note's color for the first chord after skipping leading rests.
+ * @c chordRootNoteColor() for the first chord after skipping leading rests.
  */
 Color Beam::color() const
 {
@@ -702,7 +702,7 @@ Color Beam::color() const
         if (cr) {
             Chord* chord = toChord(cr);
             if (chord->upNote()->style().styleV(Sid::colorApplyToBeam).toBool()) {
-                return chord->upNote()->color();
+                return chordRootNoteColor(chord);
             }
         }
     }

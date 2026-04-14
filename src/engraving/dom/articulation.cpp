@@ -340,7 +340,7 @@ bool Articulation::setProperty(Pid propertyId, const PropertyValue& v)
 /*!
  * Default articulation properties.
  * For @c Pid::COLOR on a chord-attached articulation, when @c Sid::colorApplyToArticulation is set,
- * returns the top note's color.
+ * returns @c chordRootColorDefault().
  */
 PropertyValue Articulation::propertyDefault(Pid propertyId) const
 {
@@ -359,7 +359,7 @@ PropertyValue Articulation::propertyDefault(Pid propertyId) const
         if (cr && cr->isChord()) {
             Chord* chord = toChord(cr);
             if (chord->upNote()->style().styleV(Sid::colorApplyToArticulation).toBool()) {
-                return PropertyValue::fromValue(chord->upNote()->color());
+                return chordRootColorDefault(chord);
             }
         }
     }
@@ -372,7 +372,7 @@ PropertyValue Articulation::propertyDefault(Pid propertyId) const
 
 /*!
  * Draw color when using the score default: if articulations inherit note colors, returns
- * the top note's color.
+ * @c chordRootNoteColor().
  */
 Color Articulation::color() const
 {
@@ -381,7 +381,7 @@ Color Articulation::color() const
         if (cr && cr->isChord()) {
             Chord* chord = toChord(cr);
             if (chord->upNote()->style().styleV(Sid::colorApplyToArticulation).toBool()) {
-                return chord->upNote()->color();
+                return chordRootNoteColor(chord);
             }
         }
     }

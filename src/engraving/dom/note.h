@@ -564,4 +564,55 @@ private:
     std::vector<LineAttachPoint> m_lineAttachPoints;
     TieJumpPointList m_jumpPoints { this };
 };
+
+/*!
+ * Estimates chord-root pitch class (0-11) for the measure containing @p note (chord-degree coloring).
+ * Uses all staves in that measure so the root reflects the full vertical harmony.
+ * @param note Context note; pitches use the same written/concert basis as note coloring (@c noteColoringEpitch).
+ * @param tonicPC Fallback when the measure has no chord content to analyze.
+ * @return Root chroma from @c analyzeChordRoot(), or @p tonicPC if there is nothing to analyze.
+ */
+int getMeasureChordRoot(const Note* note, int tonicPC);
+
+/*!
+ * Appends chord tones on @p score between @p tickStart (inclusive) and @p tickEnd (exclusive) to @p noteInfos.
+ * Iterates every measure intersecting the range and every staff; pitches match @c noteColoringEpitch().
+ * @param score Score to scan (typically the master score).
+ * @param tickStart Start of the analysis window.
+ * @param tickEnd End of the analysis window (exclusive).
+ * @param noteInfos Output; cleared first, then filled with @c ChordDegreeNoteInfo entries.
+ */
+void collectChordDegreeNoteInfosForScoreTickRange(Score* score, const Fraction& tickStart, const Fraction& tickEnd,
+                                                  std::vector<ChordDegreeNoteInfo>& noteInfos);
+
+/*!
+ * Major-key tonic pitch class (0-11) for chord-degree coloring on @p note.
+ * Same basis as automatic note coloring: written key plus transposition when concert pitch coloring is on.
+ * @param note Note whose staff key and transposition supply the tonic.
+ * @return Tonic pitch class 0-11, or 0 if @p note is null.
+ */
+int noteChordDegreesTonicPc(const Note* note);
+
+/*!
+ * Under @c NoteColoringScheme::ChordDegrees, the chord note matching the measure root chroma; else top note.
+ * When no note in @p ch matches the measure root, returns the top note.
+ * Use @c chordRootColorDefault() or @c chordRootNoteColor() for color queries that need the
+ * correct root swatch even when the chord does not contain the root pitch.
+ * @param ch Chord to inspect.
+ * @return Note whose color should propagate to chord-attached elements.
+ */
+Note* chordRootNote(Chord* ch);
+
+/*!
+ * @c Pid::COLOR property default for the chord root, safe for beams, stems, and articulations.
+ * For @c ChordDegrees computes the root swatch directly (no surrogate @c Note), so it avoids
+ * lifetime issues with thread-local objects during shutdown.
+ */
+PropertyValue chordRootColorDefault(Chord* ch);
+
+/*!
+ * Draw color for the chord root, safe for beams, stems, and articulations.
+ * See @c chordRootColorDefault() for rationale.
+ */
+Color chordRootNoteColor(Chord* ch);
 } // namespace mu::engraving

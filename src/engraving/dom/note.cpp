@@ -24,12 +24,14 @@
  \file
  Implementation of classes Note and ShadowNote.
 
- @c Note::color() defaults use @c notecoloringscheme.h.
+ Chord-degree coloring helpers (@c getMeasureChordRoot(), @c chordRootNote(), …) and @c Note::color()
+ defaults use @c notecoloringscheme.h.
 */
 
 #include "note.h"
 
 #include <cassert>
+#include <memory>
 
 #include "translation.h"
 
@@ -3220,6 +3222,269 @@ static int noteColoringEpitch(const Note* n)
 }
 
 /*!
+ * Major-key tonic pitch class (0-11) for chord-degree coloring, in the same space as @c noteColoringEpitch().
+ * When @p concertColoring is true, shifts the written key tonic by the part transposition.
+ *
+ * @param note Part transposition is taken from this note's instrument.
+ * @param key Written key signature at the note.
+ * @param concertColoring If true, use sounding-key tonic; if false, written-key tonic.
+ * @return Tonic pitch class 0-11.
+ */
+static int chordDegreesTonicPc(const Note* note, Key key, bool concertColoring)
+{
+    int tonicPC = tonicPitchClassFromKey(static_cast<int>(key));
+    if (concertColoring) {
+        tonicPC = (tonicPC + note->transposition() + 12000) % 12;
+    }
+    return tonicPC;
+}
+
+/*!
+ * Appends @c ChordDegreeNoteInfo events for chord notes in @p measure that overlap
+ * @p [rangeStart, rangeEnd), from every staff on @p measure->score().
+ * Chords starting before @p rangeStart are included if they extend into the range;
+ * the weight is the overlap duration, not the full chord duration.
+ * @param measure Measure to scan.
+ * @param rangeStart Inclusive start of the tick slice within the measure.
+ * @param rangeEnd Exclusive end of the tick slice.
+ * @param windowOrigin Reference tick; each event's @c tickInWindow uses
+ *        <tt>max(seg.tick(), rangeStart) - windowOrigin</tt> so carried-in notes
+ *        are placed at the slice start.
+ * @param noteInfos Output vector to append to (not cleared).
+ */
+static void appendChordDegreeNoteInfosFromMeasure(const Measure* measure,
+                                                  const Fraction& rangeStart, const Fraction& rangeEnd,
+                                                  const Fraction& windowOrigin,
+                                                  std::vector<ChordDegreeNoteInfo>& noteInfos)
+{
+    if (!measure || rangeStart >= rangeEnd) {
+        return;
+    }
+    const Score* score = measure->score();
+    staff_idx_t nstaves = score->nstaves();
+
+    for (const Segment& seg : measure->segments()) {
+        if (!seg.isChordRestType()) {
+            continue;
+        }
+        Fraction st = seg.tick();
+        if (st >= rangeEnd) {
+            break;
+        }
+        for (staff_idx_t staffIdx = 0; staffIdx < nstaves; ++staffIdx) {
+            track_idx_t startTrack = staffIdx * VOICES;
+            track_idx_t endTrack = startTrack + VOICES;
+            for (track_idx_t t = startTrack; t < endTrack; ++t) {
+                EngravingItem* el = seg.element(t);
+                if (!el || !el->isChord()) {
+                    continue;
+                }
+                const Chord* chord = toChord(el);
+                Fraction segEnd = st + chord->actualTicks();
+                if (segEnd <= rangeStart) {
+                    continue;
+                }
+                Fraction overlapStart = std::max(st, rangeStart);
+                Fraction overlapEnd = std::min(segEnd, rangeEnd);
+                int overlapTicks = (overlapEnd - overlapStart).ticks();
+                if (overlapTicks <= 0) {
+                    continue;
+                }
+                int tickInWindow = (overlapStart - windowOrigin).ticks();
+                for (const Note* n : chord->notes()) {
+                    noteInfos.push_back({ noteColoringEpitch(n), overlapTicks, tickInWindow });
+                }
+            }
+        }
+    }
+}
+
+/*!
+ * Estimates a chord-root pitch class (0-11) for the measure that contains @p note,
+ * using weighted note/chord data from @b all staves in that measure and @c analyzeChordRoot().
+ * Pitches use @c noteColoringEpitch() so the root matches the active coloring basis.
+ *
+ * @param note Context note (determines measure and style).
+ * @param tonicPC Fallback chroma when no chord notes are found (typically key tonic in the same basis).
+ * @return Estimated root pitch class 0-11, or @p tonicPC if there is nothing to analyze.
+ */
+int getMeasureChordRoot(const Note* note, int tonicPC)
+{
+    const Measure* measure = note->findMeasure();
+    if (!measure) {
+        return tonicPC;
+    }
+
+    int measureTicks = measure->ticks().ticks();
+    Fraction measureStartTick = measure->tick();
+    Fraction measureEndTick = measure->endTick();
+
+    std::vector<ChordDegreeNoteInfo> noteInfos;
+    appendChordDegreeNoteInfosFromMeasure(measure, measureStartTick, measureEndTick, measureStartTick, noteInfos);
+
+    return noteInfos.empty() ? tonicPC : analyzeChordRoot(noteInfos, measureTicks);
+}
+
+/*!
+ * Clears @p noteInfos, then appends chord tones on @p score from @p tickStart (inclusive) to @p tickEnd (exclusive).
+ * Visits each measure overlapping that range and every staff; pitches use @c noteColoringEpitch().
+ * @param score Score to scan.
+ * @param tickStart Inclusive start of the time range.
+ * @param tickEnd Exclusive end of the time range.
+ * @param noteInfos Filled with analysis input for @c analyzeChordRoot().
+ */
+void collectChordDegreeNoteInfosForScoreTickRange(Score* score, const Fraction& tickStart, const Fraction& tickEnd,
+                                                  std::vector<ChordDegreeNoteInfo>& noteInfos)
+{
+    noteInfos.clear();
+    if (!score || tickStart >= tickEnd) {
+        return;
+    }
+    for (Measure* m = score->tick2measure(tickStart); m && m->tick() < tickEnd; m = m->nextMeasure()) {
+        Fraction sliceStart = m->tick();
+        if (sliceStart < tickStart) {
+            sliceStart = tickStart;
+        }
+        Fraction sliceEnd = m->endTick();
+        if (sliceEnd > tickEnd) {
+            sliceEnd = tickEnd;
+        }
+        if (sliceStart >= sliceEnd) {
+            continue;
+        }
+        appendChordDegreeNoteInfosFromMeasure(m, sliceStart, sliceEnd, tickStart, noteInfos);
+    }
+}
+
+/*!
+ * Returns the major-key tonic pitch class (0-11) for chord-degree coloring, using the note's written key
+ * and @c Sid::colorNotesByConcertPitch the same way as @c chordDegreesTonicPc().
+ * @param note Source for staff, tick, transposition, and style; may be null.
+ * @return Tonic PC for @c chordDegreeColorIndex(), or 0 if @p note is null.
+ */
+int noteChordDegreesTonicPc(const Note* note)
+{
+    if (!note) {
+        return 0;
+    }
+    Key key = note->staff() ? note->staff()->key(note->tick()) : Key::C;
+    bool concertColoring = note->style().styleV(Sid::colorNotesByConcertPitch).toBool();
+    return chordDegreesTonicPc(note, key, concertColoring);
+}
+
+/*!
+ * For @c NoteColoringScheme::ChordDegrees, the chord note whose pitch class matches @c getMeasureChordRoot();
+ * otherwise the chord's top note. Used so stems, beams, and articulations inherit the root note's color.
+ *
+ * @param ch Chord whose notes are searched (callers ensure non-null).
+ * @return Note to use for inherited color; never null for a valid chord with notes.
+ * @note When no chord tone matches the measure root, returns the top note. Use
+ * @c chordRootColorDefault() or @c chordRootNoteColor() for color queries that need the
+ * correct root swatch even when the chord does not contain the root pitch.
+ */
+Note* chordRootNote(Chord* ch)
+{
+    Note* n = ch->upNote();
+    NoteColoringScheme scheme = static_cast<NoteColoringScheme>(
+        n->style().styleV(Sid::noteColorTheme).toInt());
+    if (scheme != NoteColoringScheme::ChordDegrees) {
+        return n;
+    }
+    Key key = n->staff() ? n->staff()->key(n->tick()) : Key::C;
+    bool concertColoring = n->style().styleV(Sid::colorNotesByConcertPitch).toBool();
+    int tonicPC = chordDegreesTonicPc(n, key, concertColoring);
+    int rootChroma = getMeasureChordRoot(n, tonicPC);
+    for (Note* candidate : ch->notes()) {
+        int pc = noteColoringEpitch(candidate) % 12;
+        if (pc < 0) {
+            pc += 12;
+        }
+        if (pc == rootChroma) {
+            return candidate;
+        }
+    }
+    return n;
+}
+
+/*!
+ * For @c NoteColoringScheme::ChordDegrees, computes the root's swatch index and optionally
+ * returns the matching chord tone.
+ * @param ch Chord to analyze.
+ * @param[out] matchedNote Set to the matching chord tone, or @c nullptr when no tone matches.
+ * @return Swatch index for the chord root.
+ */
+static int chordRootDegreeSwatchIdx(Chord* ch, Note*& matchedNote)
+{
+    Note* n = ch->upNote();
+    bool byConcertPitch = n->style().styleV(Sid::colorNotesByConcertPitch).toBool();
+    Key key = n->staff() ? n->staff()->key(n->tick()) : Key::C;
+    int tonicPC = chordDegreesTonicPc(n, key, byConcertPitch);
+    int rootChroma = getMeasureChordRoot(n, tonicPC);
+    matchedNote = nullptr;
+    for (Note* candidate : ch->notes()) {
+        int pc = noteColoringEpitch(candidate) % 12;
+        if (pc < 0) {
+            pc += 12;
+        }
+        if (pc == rootChroma) {
+            matchedNote = candidate;
+            break;
+        }
+    }
+    return chordDegreeColorIndex(rootChroma, rootChroma, tonicPC);
+}
+
+/*!
+ * @c Pid::COLOR property default for the chord root, safe for beams, stems, and articulations.
+ * For @c ChordDegrees computes the root swatch directly (no surrogate @c Note), so it avoids
+ * lifetime issues with thread-local objects during shutdown.
+ * For @c OneColor returns @c Sid::defaultNoteColor; for other schemes returns the top note's property.
+ */
+PropertyValue chordRootColorDefault(Chord* ch)
+{
+    Note* n = ch->upNote();
+    NoteColoringScheme scheme = static_cast<NoteColoringScheme>(
+        n->style().styleV(Sid::noteColorTheme).toInt());
+    if (scheme == NoteColoringScheme::OneColor) {
+        return n->style().styleV(Sid::defaultNoteColor);
+    }
+    if (scheme == NoteColoringScheme::ChordDegrees) {
+        Note* rootTone = nullptr;
+        int colorIdx = chordRootDegreeSwatchIdx(ch, rootTone);
+        if (rootTone) {
+            return PropertyValue::fromValue(rootTone->color());
+        }
+        Sid colorSid = static_cast<Sid>(static_cast<int>(Sid::noteColor0) + colorIdx);
+        return n->style().styleV(colorSid);
+    }
+    return PropertyValue::fromValue(n->color());
+}
+
+/*!
+ * Draw color for the chord root, safe for beams, stems, and articulations.
+ * Mirrors @c chordRootColorDefault() but returns a @c Color value suitable for painting.
+ */
+Color chordRootNoteColor(Chord* ch)
+{
+    Note* n = ch->upNote();
+    NoteColoringScheme scheme = static_cast<NoteColoringScheme>(
+        n->style().styleV(Sid::noteColorTheme).toInt());
+    if (scheme == NoteColoringScheme::OneColor) {
+        return n->style().styleV(Sid::defaultNoteColor).value<Color>();
+    }
+    if (scheme == NoteColoringScheme::ChordDegrees) {
+        Note* rootTone = nullptr;
+        int colorIdx = chordRootDegreeSwatchIdx(ch, rootTone);
+        if (rootTone) {
+            return rootTone->color();
+        }
+        Sid colorSid = static_cast<Sid>(static_cast<int>(Sid::noteColor0) + colorIdx);
+        return n->style().styleV(colorSid).value<Color>();
+    }
+    return n->color();
+}
+
+/*!
  * Swatch index (0-11) into @c Sid::noteColor0 ... @c Sid::noteColor11 for the current @c Sid::noteColorTheme.
  * Matches the logic of @c Note::color() and @c Note::propertyDefault(Pid::COLOR) for non-one-color themes.
  *
@@ -3258,6 +3523,16 @@ static int noteColoringSwatchIndex(const Note* note)
         }
         int tonicPitchClass = tonicPitchClassFromKey(static_cast<int>(key));
         return (pC - tonicPitchClass + 12) % 12;
+    }
+    case NoteColoringScheme::ChordDegrees: {
+        Key key = note->staff() ? note->staff()->key(note->tick()) : Key::C;
+        int tonicPC = chordDegreesTonicPc(note, key, byConcertPitch);
+        int rootChroma = getMeasureChordRoot(note, tonicPC);
+        int chroma = colorEpitch % 12;
+        if (chroma < 0) {
+            chroma += 12;
+        }
+        return chordDegreeColorIndex(chroma, rootChroma, tonicPC);
     }
     default:
         return 0;
